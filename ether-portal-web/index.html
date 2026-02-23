@@ -132,7 +132,10 @@
       <div id="tab-jobs" class="tab-content">
         <div class="jobs-header">
           <h2>⏰ Scheduled Jobs</h2>
-          <button id="refresh-jobs" class="btn-small">🔄 Refresh</button>
+          <div class="jobs-controls">
+            <input type="text" id="job-filter" class="filter-input" placeholder="🔍 Filter jobs..." autocomplete="off">
+            <button id="refresh-jobs" class="btn-small">🔄 Refresh</button>
+          </div>
         </div>
         <div id="jobs-list" class="jobs-list">
           <div class="loading"><span class="spinner"></span> Loading jobs...</div>

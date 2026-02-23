@@ -517,10 +517,39 @@ main {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .jobs-header h2 {
   margin: 0;
+}
+
+.jobs-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.filter-input {
+  padding: 8px 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  width: 180px;
+  transition: var(--transition);
+}
+
+.filter-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  width: 220px;
+}
+
+.filter-input::placeholder {
+  color: var(--text-muted);
 }
 
 .jobs-list {

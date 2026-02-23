@@ -109,6 +109,9 @@ class EtherPortal {
       btn.addEventListener('click', (e) => this.switchTab(e.target.dataset.tab));
     });
     
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => this.handleKeyboard(e));
+    
     // Chat input
     document.getElementById('chat-input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -121,6 +124,9 @@ class EtherPortal {
     // Refresh buttons
     document.getElementById('refresh-jobs')?.addEventListener('click', () => this.loadJobs());
     document.getElementById('refresh-sessions')?.addEventListener('click', () => this.loadSessions());
+    
+    // Job filter
+    document.getElementById('job-filter')?.addEventListener('input', (e) => this.filterJobs(e.target.value));
     
     // Clear activity
     document.getElementById('clear-activity')?.addEventListener('click', () => this.clearActivity());
@@ -149,6 +155,43 @@ class EtherPortal {
       chatInput.style.height = 'auto';
       chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
     });
+    
+    // Settings checkboxes
+    document.getElementById('setting-sound')?.addEventListener('change', (e) => {
+      this.soundEnabled = e.target.checked;
+      this.saveSettings();
+    });
+  }
+
+  handleKeyboard(e) {
+    // Don't handle if typing in an input
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    
+    // Only handle when connected
+    if (!gateway.isConnected()) return;
+    
+    // Tab shortcuts: 1-6 for tabs
+    if (e.key >= '1' && e.key <= '6' && !e.ctrlKey && !e.metaKey) {
+      const tabs = ['dashboard', 'jobs', 'sessions', 'chat', 'activity', 'settings'];
+      const idx = parseInt(e.key) - 1;
+      if (tabs[idx]) {
+        this.switchTab(tabs[idx]);
+        e.preventDefault();
+      }
+    }
+    
+    // R to refresh current tab
+    if (e.key === 'r' && !e.ctrlKey && !e.metaKey) {
+      if (this.currentTab === 'dashboard') this.loadDashboard();
+      else if (this.currentTab === 'jobs') this.loadJobs();
+      else if (this.currentTab === 'sessions') this.loadSessions();
+      e.preventDefault();
+    }
+    
+    // Escape to focus out / close modals
+    if (e.key === 'Escape') {
+      document.activeElement.blur();
+    }
   }
 
   loadSavedConfig() {
@@ -856,6 +899,32 @@ class EtherPortal {
       await this.loadJobs();
     } catch (e) {
       this.addActivity(`Failed to toggle job: ${e.message}`, 'error');
+    }
+  }
+
+  filterJobs(query) {
+    const q = query.toLowerCase().trim();
+    document.querySelectorAll('.job-card').forEach(card => {
+      const name = card.querySelector('.job-name')?.textContent?.toLowerCase() || '';
+      const schedule = card.querySelector('.job-schedule')?.textContent?.toLowerCase() || '';
+      const match = !q || name.includes(q) || schedule.includes(q);
+      card.style.display = match ? '' : 'none';
+    });
+    
+    // Show "no results" if all hidden
+    const visible = document.querySelectorAll('.job-card:not([style*="display: none"])').length;
+    const container = document.getElementById('jobs-list');
+    const noResults = container.querySelector('.no-filter-results');
+    
+    if (visible === 0 && q) {
+      if (!noResults) {
+        const div = document.createElement('div');
+        div.className = 'no-filter-results empty-state small';
+        div.innerHTML = `<span class="icon">🔍</span><p>No jobs match "${this.escapeHtml(query)}"</p>`;
+        container.appendChild(div);
+      }
+    } else if (noResults) {
+      noResults.remove();
     }
   }
 
