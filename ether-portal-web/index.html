@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a0a0f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Ether Portal</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌀</text></svg>">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Connect Screen -->
+  <div id="connect-screen" class="screen active">
+    <div class="connect-card">
+      <div class="logo">🌀</div>
+      <h1>Ether Portal</h1>
+      <p class="subtitle">Connect to your OpenClaw Gateway</p>
+      
+      <div class="form-row">
+        <div class="form-group">
+          <label for="host">Gateway Host</label>
+          <input type="text" id="host" placeholder="e.g., 100.114.153.108" autocomplete="off" autocapitalize="off" spellcheck="false">
+        </div>
+        <div class="form-group small">
+          <label for="port">Port</label>
+          <input type="number" id="port" value="18789">
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <label for="token">Gateway Token (optional)</label>
+        <input type="password" id="token" placeholder="Leave empty if no token required" autocomplete="off">
+      </div>
+      
+      <button id="connect-btn" class="btn-primary">
+        <span class="btn-text">Connect</span>
+        <span class="btn-loading hidden"><span class="spinner"></span> Connecting...</span>
+      </button>
+      
+      <p id="connect-status" class="connect-status hidden">Connecting...</p>
+      <p id="connect-error" class="error hidden"></p>
+    </div>
+  </div>
+
+  <!-- Main Screen -->
+  <div id="main-screen" class="screen">
+    <header>
+      <div class="header-left">
+        <span class="logo-small">🌀</span>
+        <span class="title">Ether Portal</span>
+      </div>
+      <div class="header-center">
+        <div id="header-clock"></div>
+      </div>
+      <div class="header-right">
+        <span id="connection-status" class="status-badge disconnected">Disconnected</span>
+        <button id="disconnect-btn" class="btn-icon" title="Disconnect">⏻</button>
+      </div>
+    </header>
+
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="dashboard">📊 Dashboard</button>
+      <button class="tab-btn" data-tab="jobs">⏰ Jobs</button>
+      <button class="tab-btn" data-tab="sessions">💬 Sessions</button>
+      <button class="tab-btn" data-tab="chat">✉️ Chat</button>
+      <button class="tab-btn" data-tab="activity">📋 Activity</button>
+    </nav>
+
+    <main>
+      <!-- Dashboard Tab -->
+      <div id="tab-dashboard" class="tab-content active">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon">🟢</div>
+            <div class="stat-info">
+              <span id="stat-status" class="stat-value">--</span>
+              <span class="stat-label">Gateway</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">💬</div>
+            <div class="stat-info">
+              <span id="stat-sessions" class="stat-value">--</span>
+              <span class="stat-label">Sessions</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">⏰</div>
+            <div class="stat-info">
+              <span id="stat-jobs" class="stat-value">--</span>
+              <span class="stat-label">Active Jobs</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">⏱️</div>
+            <div class="stat-info">
+              <span id="stat-uptime" class="stat-value">--</span>
+              <span class="stat-label">Uptime</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>⏭️ Next Scheduled Task</h2>
+          <div id="next-task" class="next-task-card">
+            <div class="task-time">--:--</div>
+            <div class="task-info">
+              <span class="task-name">Loading...</span>
+              <span class="task-countdown"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <h2>📋 Recent Activity</h2>
+          </div>
+          <div id="dashboard-activity" class="activity-list">
+            <div class="empty-state small">
+              <span class="icon">📋</span>
+              <p>Activity will appear here</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Jobs Tab -->
+      <div id="tab-jobs" class="tab-content">
+        <div class="jobs-header">
+          <h2>⏰ Scheduled Jobs</h2>
+          <button id="refresh-jobs" class="btn-small">🔄 Refresh</button>
+        </div>
+        <div id="jobs-list" class="jobs-list">
+          <div class="loading"><span class="spinner"></span> Loading jobs...</div>
+        </div>
+      </div>
+
+      <!-- Sessions Tab -->
+      <div id="tab-sessions" class="tab-content">
+        <div class="section-header">
+          <h2>💬 Active Sessions</h2>
+          <button id="refresh-sessions" class="btn-small">🔄 Refresh</button>
+        </div>
+        <p style="color: var(--text-muted); margin-bottom: 16px; font-size: 13px;">
+          Click a session to select it for the Chat tab
+        </p>
+        <div id="sessions-list" class="sessions-list">
+          <div class="loading"><span class="spinner"></span> Loading sessions...</div>
+        </div>
+      </div>
+
+      <!-- Chat Tab -->
+      <div id="tab-chat" class="tab-content">
+        <div class="chat-container">
+          <div id="chat-messages" class="chat-messages">
+            <div class="chat-welcome">
+              <span class="welcome-icon">💬</span>
+              <p>Send messages to your AI assistant</p>
+              <p style="font-size: 12px; margin-top: 8px; color: var(--text-muted);">
+                Select a session from the Sessions tab first
+              </p>
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <textarea id="chat-input" placeholder="Type a message..." rows="1"></textarea>
+            <button id="chat-send" class="btn-send" title="Send message">➤</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Activity Tab -->
+      <div id="tab-activity" class="tab-content">
+        <div class="activity-header">
+          <h2>📋 Activity Log</h2>
+          <button id="clear-activity" class="btn-small">🗑️ Clear</button>
+        </div>
+        <div id="activity-list" class="activity-list">
+          <div class="empty-state">
+            <span class="icon">📋</span>
+            <p>No recent activity</p>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="js/gateway.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
