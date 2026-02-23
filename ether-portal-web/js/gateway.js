@@ -2,9 +2,11 @@
 // Protocol v3 compliant with proper challenge handling
 
 class GatewayClient {
+  static VERSION = '1.2.0';
+  
   constructor() {
     this.ws = null;
-    this.config = { host: '', port: 18789, token: '' };
+    this.config = { host: '', port: 18789, token: '', autoReconnect: true };
     this.connected = false;
     this.requestId = 0;
     this.pendingRequests = new Map();
@@ -13,10 +15,16 @@ class GatewayClient {
     this.pingInterval = null;
     this.lastPong = null;
     this.connectionAttempts = 0;
-    this.maxReconnectAttempts = 5;
+    this.maxReconnectAttempts = 10;
     this.challengeNonce = null;
     this.deviceId = null;
     this.connectPromise = null;
+    this.connectionStartTime = null;
+    this.serverInfo = null;
+    this.messageStats = { sent: 0, received: 0 };
+    this.lastError = null;
+    this.heartbeatMissed = 0;
+    this.maxHeartbeatMissed = 3;
   }
 
   configure(config) {
@@ -26,6 +34,20 @@ class GatewayClient {
   getWsUrl() {
     const protocol = this.config.useTls ? 'wss' : 'ws';
     return `${protocol}://${this.config.host}:${this.config.port}/ws`;
+  }
+
+  getConnectionInfo() {
+    return {
+      connected: this.connected,
+      state: this.getConnectionState(),
+      url: this.config.host ? this.getWsUrl() : null,
+      deviceId: this.deviceId,
+      serverInfo: this.serverInfo,
+      uptime: this.connectionStartTime ? Date.now() - this.connectionStartTime : 0,
+      stats: { ...this.messageStats },
+      lastError: this.lastError,
+      reconnectAttempts: this.connectionAttempts
+    };
   }
 
   // Generate or retrieve stable device ID
@@ -71,23 +93,25 @@ class GatewayClient {
 
     this.connectPromise = new Promise((resolve, reject) => {
       this.connectionAttempts++;
+      this.lastError = null;
       
       try {
         const url = this.getWsUrl();
         console.log(`[Gateway] Connecting to ${url} (attempt ${this.connectionAttempts})...`);
-        this.emit('connecting', { attempt: this.connectionAttempts, url });
+        this.emit('connecting', { attempt: this.connectionAttempts, url, maxAttempts: this.maxReconnectAttempts });
         
         this.ws = new WebSocket(url);
         
-        // Connection timeout
+        // Connection timeout - 15 seconds
         const timeout = setTimeout(() => {
           if (this.ws && this.ws.readyState !== WebSocket.OPEN) {
-            console.error('[Gateway] Connection timeout');
-            this.ws.close();
+            console.error('[Gateway] Connection timeout after 15s');
+            this.lastError = 'Connection timeout - check host/port';
+            this.ws.close(4000, 'Connection timeout');
             this.connectPromise = null;
-            reject(new Error('Connection timeout'));
+            reject(new Error('Connection timeout - check if the gateway is running and reachable'));
           }
-        }, 10000);
+        }, 15000);
 
         this.ws.onopen = () => {
           console.log('[Gateway] WebSocket opened, waiting for challenge...');
@@ -96,42 +120,86 @@ class GatewayClient {
         };
 
         this.ws.onmessage = (event) => {
+          this.messageStats.received++;
           try {
             const data = JSON.parse(event.data);
             this.handleMessage(data, resolve, reject);
           } catch (e) {
             console.error('[Gateway] Failed to parse message:', e, event.data);
+            this.emit('parse_error', { error: e.message, data: event.data });
           }
         };
 
         this.ws.onclose = (event) => {
           clearTimeout(timeout);
+          const wasConnected = this.connected;
           console.log('[Gateway] WebSocket closed:', event.code, event.reason);
           this.connected = false;
           this.connectPromise = null;
           this.challengeNonce = null;
-          this.emit('disconnected', { code: event.code, reason: event.reason });
+          this.serverInfo = null;
+          
+          // Interpret close codes
+          let closeReason = event.reason || this.interpretCloseCode(event.code);
+          this.lastError = closeReason;
+          
+          this.emit('disconnected', { 
+            code: event.code, 
+            reason: closeReason,
+            wasConnected,
+            willReconnect: this.config.autoReconnect && wasConnected
+          });
           this.stopPing();
           
+          // Auto-reconnect if was connected and autoReconnect is enabled
+          if (wasConnected && this.config.autoReconnect) {
+            this.scheduleReconnect();
+          }
+          
           // Only reject if we haven't resolved yet
-          if (!this.connected) {
-            reject(new Error(event.reason || `Connection closed (${event.code})`));
+          if (!wasConnected) {
+            reject(new Error(closeReason || `Connection closed (${event.code})`));
           }
         };
 
         this.ws.onerror = (error) => {
           clearTimeout(timeout);
           console.error('[Gateway] WebSocket error:', error);
-          this.emit('error', { error: 'WebSocket connection failed' });
+          this.lastError = 'WebSocket connection failed - check network/firewall';
+          this.emit('error', { error: 'WebSocket connection failed - verify the host is reachable' });
         };
 
       } catch (error) {
+        this.lastError = error.message;
         this.connectPromise = null;
         reject(error);
       }
     });
 
     return this.connectPromise;
+  }
+
+  interpretCloseCode(code) {
+    const codes = {
+      1000: 'Normal closure',
+      1001: 'Going away',
+      1002: 'Protocol error',
+      1003: 'Unsupported data',
+      1006: 'Connection lost - server may be down',
+      1007: 'Invalid data',
+      1008: 'Policy violation',
+      1009: 'Message too big',
+      1010: 'Extension required',
+      1011: 'Internal error',
+      1012: 'Service restart',
+      1013: 'Try again later',
+      1015: 'TLS handshake failed',
+      4000: 'Ping timeout',
+      4001: 'Authentication failed',
+      4002: 'Invalid request',
+      4003: 'Forbidden'
+    };
+    return codes[code] || `Unknown error (${code})`;
   }
 
   handleMessage(data, connectResolve, connectReject) {
@@ -153,6 +221,15 @@ class GatewayClient {
         console.log('[Gateway] Connected successfully! Protocol:', data.payload.protocol);
         this.connected = true;
         this.connectionAttempts = 0;
+        this.connectionStartTime = Date.now();
+        this.heartbeatMissed = 0;
+        
+        // Store server info
+        this.serverInfo = {
+          protocol: data.payload.protocol,
+          version: data.payload.version,
+          features: data.payload.features || []
+        };
         
         // Store device token if provided
         if (data.payload.auth?.deviceToken) {
@@ -217,6 +294,7 @@ class GatewayClient {
     // Handle pong
     if (data.type === 'pong') {
       this.lastPong = Date.now();
+      this.heartbeatMissed = 0;
       return;
     }
 
@@ -245,7 +323,7 @@ class GatewayClient {
         maxProtocol: 3,
         client: {
           id: 'ether-portal-web',
-          version: '1.1.0',
+          version: GatewayClient.VERSION,
           platform: this.detectPlatform(),
           mode: 'ui'
         },
@@ -303,14 +381,15 @@ class GatewayClient {
         params
       };
 
-      this.pendingRequests.set(id, { resolve, reject });
+      this.pendingRequests.set(id, { resolve, reject, method, sentAt: Date.now() });
       this.ws.send(JSON.stringify(request));
+      this.messageStats.sent++;
 
-      // Timeout after 30s
+      // Timeout after 30s with better error message
       setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
-          reject(new Error('Request timeout'));
+          reject(new Error(`Request timeout for ${method}`));
         }
       }, 30000);
     });
@@ -319,16 +398,25 @@ class GatewayClient {
   startPing() {
     this.stopPing();
     this.lastPong = Date.now();
+    this.heartbeatMissed = 0;
     
     this.pingInterval = setInterval(() => {
       if (this.ws?.readyState === WebSocket.OPEN) {
         // Check if we haven't received a pong in a while
-        if (this.lastPong && Date.now() - this.lastPong > 60000) {
-          console.warn('[Gateway] No pong received in 60s, reconnecting...');
-          this.ws.close(4000, 'Ping timeout');
-          return;
+        const timeSinceLastPong = Date.now() - this.lastPong;
+        if (timeSinceLastPong > 30000) {
+          this.heartbeatMissed++;
+          console.warn(`[Gateway] Heartbeat missed (${this.heartbeatMissed}/${this.maxHeartbeatMissed}), last pong ${Math.round(timeSinceLastPong/1000)}s ago`);
+          this.emit('heartbeat_missed', { count: this.heartbeatMissed, lastPong: this.lastPong });
+          
+          if (this.heartbeatMissed >= this.maxHeartbeatMissed) {
+            console.error('[Gateway] Too many missed heartbeats, reconnecting...');
+            this.ws.close(4000, 'Ping timeout - heartbeat missed');
+            return;
+          }
         }
         this.ws.send(JSON.stringify({ type: 'ping' }));
+        this.messageStats.sent++;
       }
     }, 25000);
   }
@@ -343,6 +431,7 @@ class GatewayClient {
   disconnect() {
     this.stopPing();
     this.connectionAttempts = 0;
+    this.config.autoReconnect = false; // Prevent auto-reconnect on manual disconnect
     
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -357,6 +446,16 @@ class GatewayClient {
     this.connected = false;
     this.connectPromise = null;
     this.pendingRequests.clear();
+    this.connectionStartTime = null;
+    this.serverInfo = null;
+  }
+
+  // Reset for fresh connection
+  reset() {
+    this.disconnect();
+    this.config.autoReconnect = true;
+    this.messageStats = { sent: 0, received: 0 };
+    this.lastError = null;
   }
 
   // Reconnect with exponential backoff
@@ -364,20 +463,39 @@ class GatewayClient {
     if (this.reconnectTimer) return;
     if (this.connectionAttempts >= this.maxReconnectAttempts) {
       console.error('[Gateway] Max reconnection attempts reached');
-      this.emit('max_reconnects');
+      this.lastError = 'Max reconnection attempts reached';
+      this.emit('max_reconnects', { attempts: this.connectionAttempts });
       return;
     }
 
-    const delay = Math.min(1000 * Math.pow(2, this.connectionAttempts), 30000);
-    console.log(`[Gateway] Reconnecting in ${delay}ms...`);
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s (capped)
+    const delay = Math.min(1000 * Math.pow(2, this.connectionAttempts - 1), 32000);
+    console.log(`[Gateway] Reconnecting in ${delay}ms (attempt ${this.connectionAttempts + 1}/${this.maxReconnectAttempts})...`);
+    
+    this.emit('reconnecting', { 
+      attempt: this.connectionAttempts + 1, 
+      maxAttempts: this.maxReconnectAttempts,
+      delayMs: delay 
+    });
     
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect().catch(err => {
         console.error('[Gateway] Reconnect failed:', err.message);
-        this.scheduleReconnect();
+        if (this.config.autoReconnect) {
+          this.scheduleReconnect();
+        }
       });
     }, delay);
+  }
+
+  // Cancel scheduled reconnection
+  cancelReconnect() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      this.emit('reconnect_cancelled');
+    }
   }
 
   // Event handling
@@ -462,6 +580,14 @@ class GatewayClient {
 
   async getModels() {
     return this.send('models.list');
+  }
+
+  async getNodes() {
+    return this.send('nodes.status');
+  }
+
+  async getGatewayConfig() {
+    return this.send('gateway.config');
   }
 
   // Check connection state

@@ -2,8 +2,8 @@
 // Enhanced UI with sessions view, activity logs, and better UX
 
 document.addEventListener('DOMContentLoaded', () => {
-  const app = new EtherPortal();
-  app.init();
+  window.app = new EtherPortal();
+  window.app.init();
 });
 
 class EtherPortal {
@@ -15,6 +15,11 @@ class EtherPortal {
     this.sessionKey = null; // Will be auto-detected
     this.refreshInterval = null;
     this.clockInterval = null;
+    this.reconnectCountdown = null;
+    this.systemInfo = null;
+    this.notificationPermission = 'default';
+    this.soundEnabled = true;
+    this.darkTheme = true;
   }
 
   init() {
@@ -22,6 +27,69 @@ class EtherPortal {
     this.loadSavedConfig();
     this.startClock();
     this.restoreActivity();
+    this.requestNotificationPermission();
+    this.loadSettings();
+    this.updateVersionDisplay();
+  }
+
+  updateVersionDisplay() {
+    const versionEl = document.getElementById('app-version');
+    if (versionEl) {
+      versionEl.textContent = `v${GatewayClient.VERSION}`;
+    }
+  }
+
+  requestNotificationPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().then(permission => {
+        this.notificationPermission = permission;
+      });
+    } else if ('Notification' in window) {
+      this.notificationPermission = Notification.permission;
+    }
+  }
+
+  showNotification(title, body, icon = '🌀') {
+    if (this.notificationPermission === 'granted' && document.hidden) {
+      new Notification(title, { body, icon: '/favicon.ico', badge: '/favicon.ico' });
+    }
+  }
+
+  playSound(type = 'notification') {
+    if (!this.soundEnabled) return;
+    // Simple beep using Web Audio API
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      oscillator.frequency.value = type === 'error' ? 300 : 800;
+      oscillator.type = 'sine';
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+      oscillator.start(audioCtx.currentTime);
+      oscillator.stop(audioCtx.currentTime + 0.2);
+    } catch (e) {
+      // Audio not supported
+    }
+  }
+
+  loadSettings() {
+    try {
+      const settings = JSON.parse(localStorage.getItem('ether-portal-settings') || '{}');
+      this.soundEnabled = settings.soundEnabled ?? true;
+      this.darkTheme = settings.darkTheme ?? true;
+    } catch (e) {
+      console.warn('Failed to load settings:', e);
+    }
+  }
+
+  saveSettings() {
+    localStorage.setItem('ether-portal-settings', JSON.stringify({
+      soundEnabled: this.soundEnabled,
+      darkTheme: this.darkTheme
+    }));
   }
 
   bindEvents() {
@@ -69,6 +137,11 @@ class EtherPortal {
     gateway.on('job_started', (data) => this.onJobStarted(data));
     gateway.on('job_completed', (data) => this.onJobCompleted(data));
     gateway.on('session_message', (data) => this.onSessionMessage(data));
+    
+    // Reconnection events
+    gateway.on('reconnecting', (data) => this.onReconnecting(data));
+    gateway.on('max_reconnects', () => this.onMaxReconnects());
+    gateway.on('heartbeat_missed', (data) => this.onHeartbeatMissed(data));
     
     // Auto-resize chat input
     const chatInput = document.getElementById('chat-input');
@@ -176,13 +249,65 @@ class EtherPortal {
   }
 
   onConnecting(data) {
-    this.updateConnectionStatus(`Connecting (attempt ${data.attempt})...`, 'connecting');
+    this.updateConnectionStatus(`Connecting (${data.attempt}/${data.maxAttempts})...`, 'connecting');
+    this.clearReconnectCountdown();
+  }
+
+  onReconnecting(data) {
+    this.addActivity(`Reconnecting in ${Math.round(data.delayMs / 1000)}s (attempt ${data.attempt}/${data.maxAttempts})...`, 'warning');
+    this.startReconnectCountdown(data.delayMs);
+  }
+
+  onMaxReconnects() {
+    this.clearReconnectCountdown();
+    this.updateConnectionStatus('Failed - Max retries', 'disconnected');
+    this.addActivity('Max reconnection attempts reached. Click "Reconnect" to try again.', 'error');
+    this.showReconnectButton();
+  }
+
+  onHeartbeatMissed(data) {
+    this.addActivity(`Heartbeat missed (${data.count}/3) - connection may be unstable`, 'warning');
+  }
+
+  startReconnectCountdown(delayMs) {
+    this.clearReconnectCountdown();
+    let remaining = Math.round(delayMs / 1000);
+    
+    const updateStatus = () => {
+      if (remaining > 0) {
+        this.updateConnectionStatus(`Reconnecting in ${remaining}s...`, 'connecting');
+        remaining--;
+      }
+    };
+    updateStatus();
+    this.reconnectCountdown = setInterval(updateStatus, 1000);
+  }
+
+  clearReconnectCountdown() {
+    if (this.reconnectCountdown) {
+      clearInterval(this.reconnectCountdown);
+      this.reconnectCountdown = null;
+    }
+  }
+
+  showReconnectButton() {
+    const statusEl = document.getElementById('connection-status');
+    if (statusEl) {
+      statusEl.innerHTML = `<span class="status-text">Disconnected</span> <button class="btn-reconnect" onclick="app.reconnect()">🔄 Reconnect</button>`;
+      statusEl.className = 'status-badge disconnected';
+    }
+  }
+
+  reconnect() {
+    gateway.reset();
+    this.connect();
   }
 
   onConnected(data) {
     document.getElementById('connect-screen').classList.remove('active');
     document.getElementById('main-screen').classList.add('active');
     this.updateConnectionStatus('Connected', 'connected');
+    this.clearReconnectCountdown();
     
     // Reset button state
     const btn = document.getElementById('connect-btn');
@@ -190,19 +315,36 @@ class EtherPortal {
     btn.querySelector('.btn-text').classList.remove('hidden');
     btn.querySelector('.btn-loading').classList.add('hidden');
     
+    // Re-enable auto-reconnect
+    gateway.config.autoReconnect = true;
+    
     this.loadDashboard();
     this.loadJobs();
     this.loadSessions();
+    this.loadSystemInfo();
     this.addActivity('Connected to Ether Gateway', 'success');
+    this.showNotification('Ether Portal', 'Connected to Gateway');
     
     // Start periodic refresh
     this.startRefreshInterval();
   }
 
   onDisconnected(data) {
-    this.updateConnectionStatus('Disconnected', 'disconnected');
+    this.clearReconnectCountdown();
+    
+    if (data.willReconnect) {
+      this.updateConnectionStatus('Reconnecting...', 'connecting');
+    } else {
+      this.updateConnectionStatus('Disconnected', 'disconnected');
+    }
+    
     this.addActivity(`Disconnected: ${data?.reason || 'Connection lost'}`, 'error');
     this.stopRefreshInterval();
+    
+    if (data.wasConnected) {
+      this.showNotification('Ether Portal', 'Disconnected from Gateway');
+      this.playSound('error');
+    }
   }
 
   onError(data) {
@@ -211,10 +353,13 @@ class EtherPortal {
 
   onJobStarted(data) {
     this.addActivity(`Job started: ${data?.name || data?.jobId || 'Unknown'}`, 'info');
+    this.showNotification('Job Started', data?.name || 'Unknown job');
+    this.playSound('notification');
   }
 
   onJobCompleted(data) {
     this.addActivity(`Job completed: ${data?.name || data?.jobId || 'Unknown'}`, 'success');
+    this.showNotification('Job Completed', data?.name || 'Unknown job');
     // Refresh jobs to update next run time
     setTimeout(() => this.loadJobs(), 1000);
   }
@@ -295,9 +440,69 @@ class EtherPortal {
       if (status?.uptimeMs) {
         document.getElementById('stat-uptime').textContent = this.formatUptime(status.uptimeMs);
       }
+      
+      // Update connection info card if it exists
+      this.updateConnectionInfoCard();
     } catch (e) {
       console.error('Failed to load dashboard:', e);
       this.addActivity('Dashboard refresh failed', 'error');
+    }
+  }
+
+  updateConnectionInfoCard() {
+    const card = document.getElementById('connection-info-card');
+    if (!card) return;
+    
+    const info = gateway.getConnectionInfo();
+    card.innerHTML = `
+      <div class="info-row">
+        <span class="info-label">Device ID</span>
+        <span class="info-value">${info.deviceId || '--'}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Protocol</span>
+        <span class="info-value">${info.serverInfo?.protocol || '--'}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Session Uptime</span>
+        <span class="info-value">${info.uptime ? this.formatUptime(info.uptime) : '--'}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Messages</span>
+        <span class="info-value">↑${info.stats.sent} ↓${info.stats.received}</span>
+      </div>
+    `;
+  }
+
+  async loadSystemInfo() {
+    try {
+      const [status, health] = await Promise.all([
+        gateway.getStatus().catch(() => null),
+        gateway.getHealth().catch(() => null)
+      ]);
+      
+      this.systemInfo = { status, health };
+      
+      // Update system info panel if exists
+      const panel = document.getElementById('system-info-panel');
+      if (panel && status) {
+        panel.innerHTML = `
+          <div class="system-info-item">
+            <span class="system-label">Host</span>
+            <span class="system-value">${status.host || gateway.config.host}</span>
+          </div>
+          <div class="system-info-item">
+            <span class="system-label">Uptime</span>
+            <span class="system-value">${status.uptimeMs ? this.formatUptime(status.uptimeMs) : '--'}</span>
+          </div>
+          <div class="system-info-item">
+            <span class="system-label">Version</span>
+            <span class="system-value">${status.version || '--'}</span>
+          </div>
+        `;
+      }
+    } catch (e) {
+      console.error('Failed to load system info:', e);
     }
   }
 
@@ -570,8 +775,61 @@ class EtherPortal {
       card.classList.toggle('selected', card.dataset.key === sessionKey);
     });
     
+    // Load session history
+    this.loadSessionHistory(sessionKey);
+    
     // Switch to chat tab
     this.switchTab('chat');
+  }
+
+  async loadSessionHistory(sessionKey) {
+    const container = document.getElementById('chat-messages');
+    container.innerHTML = '<div class="loading"><span class="spinner"></span> Loading history...</div>';
+    
+    try {
+      const result = await gateway.getSessionHistory(sessionKey, 30);
+      const messages = result?.messages || [];
+      
+      container.innerHTML = '';
+      
+      if (messages.length === 0) {
+        container.innerHTML = `
+          <div class="chat-welcome">
+            <span class="welcome-icon">💬</span>
+            <p>No messages in this session yet</p>
+            <p style="font-size: 12px; margin-top: 8px; color: var(--text-muted);">
+              Send a message below to start
+            </p>
+          </div>
+        `;
+        return;
+      }
+      
+      // Display messages (oldest first)
+      messages.reverse().forEach(msg => {
+        if (msg.role === 'user' || msg.role === 'assistant') {
+          const content = typeof msg.content === 'string' 
+            ? msg.content 
+            : (msg.content?.map?.(c => c.text || '').join('') || '');
+          
+          if (content.trim()) {
+            this.addChatMessage(msg.role, content, new Date(msg.timestamp || Date.now()));
+          }
+        }
+      });
+      
+      container.scrollTop = container.scrollHeight;
+    } catch (e) {
+      container.innerHTML = `
+        <div class="chat-welcome">
+          <span class="welcome-icon">⚠️</span>
+          <p>Failed to load history</p>
+          <p style="font-size: 12px; margin-top: 8px; color: var(--text-muted);">
+            ${this.escapeHtml(e.message)}
+          </p>
+        </div>
+      `;
+    }
   }
 
   async runJob(jobId) {
@@ -628,7 +886,7 @@ class EtherPortal {
     }
   }
 
-  addChatMessage(role, content) {
+  addChatMessage(role, content, timestamp = null) {
     const container = document.getElementById('chat-messages');
     const welcome = container.querySelector('.chat-welcome');
     if (welcome) welcome.remove();
@@ -636,9 +894,17 @@ class EtherPortal {
     const div = document.createElement('div');
     div.className = `message ${role}`;
     
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const time = timestamp ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+      : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    
+    // Truncate very long messages with expand option
+    const maxLen = 2000;
+    const isTruncated = content.length > maxLen;
+    const displayContent = isTruncated ? content.slice(0, maxLen) + '...' : content;
+    
     div.innerHTML = `
-      <div class="message-content">${this.escapeHtml(content)}</div>
+      <div class="message-content">${this.escapeHtml(displayContent)}</div>
+      ${isTruncated ? '<button class="btn-expand" onclick="this.parentElement.querySelector(\'.message-content\').textContent = this.dataset.full; this.remove();" data-full="' + this.escapeHtml(content).replace(/"/g, '&quot;') + '">Show more</button>' : ''}
       <div class="message-time">${time}</div>
     `;
     

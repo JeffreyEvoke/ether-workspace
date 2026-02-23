@@ -50,6 +50,7 @@
       <div class="header-left">
         <span class="logo-small">🌀</span>
         <span class="title">Ether Portal</span>
+        <span id="app-version" class="version-badge"></span>
       </div>
       <div class="header-center">
         <div id="header-clock"></div>
@@ -66,6 +67,7 @@
       <button class="tab-btn" data-tab="sessions">💬 Sessions</button>
       <button class="tab-btn" data-tab="chat">✉️ Chat</button>
       <button class="tab-btn" data-tab="activity">📋 Activity</button>
+      <button class="tab-btn" data-tab="settings">⚙️ Settings</button>
     </nav>
 
     <main>
@@ -180,6 +182,57 @@
           <div class="empty-state">
             <span class="icon">📋</span>
             <p>No recent activity</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Tab -->
+      <div id="tab-settings" class="tab-content">
+        <h2>⚙️ Settings</h2>
+        
+        <div class="settings-section">
+          <h3>Connection</h3>
+          <div id="connection-info-card" class="info-card">
+            <div class="info-row">
+              <span class="info-label">Device ID</span>
+              <span class="info-value">--</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>System Information</h3>
+          <div id="system-info-panel" class="info-card">
+            <p style="color: var(--text-muted);">Connect to view system info</p>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Notifications</h3>
+          <div class="setting-row">
+            <label>
+              <input type="checkbox" id="setting-sound" checked>
+              <span>Sound alerts</span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <label>
+              <input type="checkbox" id="setting-notifications" checked>
+              <span>Browser notifications</span>
+            </label>
+            <button class="btn-small" onclick="Notification.requestPermission()">Request Permission</button>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Storage</h3>
+          <div class="setting-row">
+            <span>Stored device token</span>
+            <button class="btn-small" onclick="localStorage.removeItem('ether-portal-device-token'); alert('Token cleared!');">Clear Token</button>
+          </div>
+          <div class="setting-row">
+            <span>All portal data</span>
+            <button class="btn-small danger" onclick="if(confirm('Clear all local data?')){localStorage.clear(); location.reload();}">Reset Portal</button>
           </div>
         </div>
       </div>
